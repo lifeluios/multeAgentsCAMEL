@@ -12,14 +12,14 @@
 # limitations under the License.
 # ========= Copyright 2023-2024 @ CAMEL-AI.org. All Rights Reserved. =========
 import os
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel
+from openai import AsyncStream, Stream
 
 from camel.configs import ANTHROPIC_API_PARAMS, AnthropicConfig
 from camel.messages import OpenAIMessage
-from camel.models.base_model import BaseModelBackend
-from camel.types import ChatCompletion, ModelType
+from camel.models.openai_compatible_model import OpenAICompatibleModel
+from camel.types import ChatCompletion, ChatCompletionChunk, ModelType
 from camel.utils import (
     AnthropicTokenCounter,
     BaseTokenCounter,
@@ -28,8 +28,49 @@ from camel.utils import (
 )
 
 
-class AnthropicModel(BaseModelBackend):
-    r"""Anthropic API in a unified BaseModelBackend interface.
+def strip_trailing_whitespace_from_messages(
+    messages: List[OpenAIMessage],
+) -> List[OpenAIMessage]:
+    r"""Strip trailing whitespace from all message contents in a list of
+    messages. This is necessary because the Anthropic API doesn't allow
+    trailing whitespace in message content.
+
+    Args:
+        messages (List[OpenAIMessage]): List of messages to process
+
+    Returns:
+        List[OpenAIMessage]: The processed messages with trailing whitespace
+            removed
+    """
+    if not messages:
+        return messages
+
+    # Create a deep copy to avoid modifying the original messages
+    processed_messages = [dict(msg) for msg in messages]
+
+    # Process each message
+    for msg in processed_messages:
+        if "content" in msg and msg["content"] is not None:
+            if isinstance(msg["content"], str):
+                msg["content"] = msg["content"].rstrip()
+            elif isinstance(msg["content"], list):
+                # Handle content that's a list of content parts (e.g., for
+                # multimodal content)
+                for i, part in enumerate(msg["content"]):
+                    if (
+                        isinstance(part, dict)
+                        and "text" in part
+                        and isinstance(part["text"], str)
+                    ):
+                        part["text"] = part["text"].rstrip()
+                    elif isinstance(part, str):
+                        msg["content"][i] = part.rstrip()
+
+    return processed_messages  # type: ignore[return-value]
+
+
+class AnthropicModel(OpenAICompatibleModel):
+    r"""Anthropic API in a unified OpenAICompatibleModel interface.
 
     Args:
         model_type (Union[ModelType, str]): Model for which a backend is
@@ -45,6 +86,14 @@ class AnthropicModel(BaseModelBackend):
         token_counter (Optional[BaseTokenCounter], optional): Token counter to
             use for the model. If not provided, :obj:`AnthropicTokenCounter`
             will be used. (default: :obj:`None`)
+        timeout (Optional[float], optional): The timeout value in seconds for
+            API calls. If not provided, will fall back to the MODEL_TIMEOUT
+            environment variable or default to 180 seconds.
+            (default: :obj:`None`)
+        max_retries (int, optional): Maximum number of retries for API calls.
+            (default: :obj:`3`)
+        **kwargs (Any): Additional arguments to pass to the client
+            initialization.
     """
 
     @api_keys_required(
@@ -60,9 +109,10 @@ class AnthropicModel(BaseModelBackend):
         api_key: Optional[str] = None,
         url: Optional[str] = None,
         token_counter: Optional[BaseTokenCounter] = None,
+        timeout: Optional[float] = None,
+        max_retries: int = 3,
+        **kwargs: Any,
     ) -> None:
-        from openai import AsyncOpenAI, OpenAI
-
         if model_config_dict is None:
             model_config_dict = AnthropicConfig().as_dict()
         api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -71,14 +121,20 @@ class AnthropicModel(BaseModelBackend):
             or os.environ.get("ANTHROPIC_API_BASE_URL")
             or "https://api.anthropic.com/v1/"
         )
+        timeout = timeout or float(os.environ.get("MODEL_TIMEOUT", 180))
         super().__init__(
-            model_type, model_config_dict, api_key, url, token_counter
+            model_type=model_type,
+            model_config_dict=model_config_dict,
+            api_key=api_key,
+            url=url,
+            token_counter=token_counter,
+            timeout=timeout,
+            max_retries=max_retries,
+            **kwargs,
         )
-        self.client = OpenAI(base_url=self._url, api_key=self._api_key)
 
-        self.async_client = AsyncOpenAI(
-            api_key=self._api_key, base_url=self._url
-        )
+        # Monkey patch the AnthropicTokenCounter to handle trailing whitespace
+        self._patch_anthropic_token_counter()
 
     @property
     def token_counter(self) -> BaseTokenCounter:
@@ -91,54 +147,6 @@ class AnthropicModel(BaseModelBackend):
         if not self._token_counter:
             self._token_counter = AnthropicTokenCounter(self.model_type)
         return self._token_counter
-
-    def _run(
-        self,
-        messages: List[OpenAIMessage],
-        response_format: Optional[Type[BaseModel]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-    ):
-        r"""Run inference of Anthropic chat completion.
-
-        Args:
-            messages (List[OpenAIMessage]): Message list with the chat history
-                in OpenAI API format.
-
-        Returns:
-            ChatCompletion: Response in the OpenAI API format.
-        """
-        response = self.client.chat.completions.create(
-            model=self.model_type,
-            messages=messages,
-            **self.model_config_dict,
-            tools=tools,  # type: ignore[arg-type]
-        )
-
-        return response
-
-    async def _arun(
-        self,
-        messages: List[OpenAIMessage],
-        response_format: Optional[Type[BaseModel]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> ChatCompletion:
-        r"""Run inference of Anthropic chat completion.
-
-        Args:
-            messages (List[OpenAIMessage]): Message list with the chat history
-                in OpenAI API format.
-
-        Returns:
-            ChatCompletion: Response in the OpenAI API format.
-        """
-        response = await self.async_client.chat.completions.create(
-            model=self.model_type,
-            messages=messages,
-            **self.model_config_dict,
-            tools=tools,  # type: ignore[arg-type]
-        )
-
-        return response
 
     def check_model_config(self):
         r"""Check whether the model configuration is valid for anthropic
@@ -155,12 +163,67 @@ class AnthropicModel(BaseModelBackend):
                     "input into Anthropic model backend."
                 )
 
-    @property
-    def stream(self) -> bool:
-        r"""Returns whether the model is in stream mode, which sends partial
-        results each time.
+    def _request_chat_completion(
+        self,
+        messages: List[OpenAIMessage],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[ChatCompletion, Stream[ChatCompletionChunk]]:
+        # Strip trailing whitespace from all message contents to prevent
+        # Anthropic API errors
+        processed_messages = strip_trailing_whitespace_from_messages(messages)
 
-        Returns:
-            bool: Whether the model is in stream mode.
+        # Call the parent class method
+        return super()._request_chat_completion(processed_messages, tools)
+
+    async def _arequest_chat_completion(
+        self,
+        messages: List[OpenAIMessage],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[ChatCompletion, AsyncStream[ChatCompletionChunk]]:
+        # Strip trailing whitespace from all message contents to prevent
+        # Anthropic API errors
+        processed_messages = strip_trailing_whitespace_from_messages(messages)
+
+        # Call the parent class method
+        return await super()._arequest_chat_completion(
+            processed_messages, tools
+        )
+
+    def _patch_anthropic_token_counter(self):
+        r"""Monkey patch the AnthropicTokenCounter class to handle trailing
+        whitespace.
+
+        This patches the count_tokens_from_messages method to strip trailing
+        whitespace from message content before sending to the Anthropic API.
         """
-        return self.model_config_dict.get("stream", False)
+        import functools
+
+        from anthropic.types import MessageParam
+
+        from camel.utils import AnthropicTokenCounter
+
+        original_count_tokens = (
+            AnthropicTokenCounter.count_tokens_from_messages
+        )
+
+        @functools.wraps(original_count_tokens)
+        def patched_count_tokens(self, messages):
+            # Process messages to remove trailing whitespace
+            processed_messages = strip_trailing_whitespace_from_messages(
+                messages
+            )
+
+            # Use the processed messages with the original method
+            return self.client.messages.count_tokens(
+                messages=[
+                    MessageParam(
+                        content=str(msg["content"]),
+                        role="user" if msg["role"] == "user" else "assistant",
+                    )
+                    for msg in processed_messages
+                ],
+                model=self.model,
+            ).input_tokens
+
+        # Apply the monkey patch
+        AnthropicTokenCounter.count_tokens_from_messages = patched_count_tokens

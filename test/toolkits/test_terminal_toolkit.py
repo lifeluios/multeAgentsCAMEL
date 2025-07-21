@@ -11,7 +11,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ========= Copyright 2023-2024 @ CAMEL-AI.org. All Rights Reserved. =========
-import os
 import platform
 import tempfile
 from pathlib import Path
@@ -22,8 +21,8 @@ from camel.toolkits import TerminalToolkit
 
 
 @pytest.fixture
-def terminal_toolkit():
-    return TerminalToolkit()
+def terminal_toolkit(temp_dir):
+    return TerminalToolkit(working_directory=temp_dir, safe_mode=False)
 
 
 @pytest.fixture
@@ -47,60 +46,10 @@ def test_init():
     assert toolkit.os_type == platform.system()
 
 
-def test_file_find_in_content(terminal_toolkit, test_file):
-    # Test basic pattern matching
-    result = terminal_toolkit.file_find_in_content(str(test_file), "World")
-    assert "World" in result
-
-    # Test regex pattern
-    result = terminal_toolkit.file_find_in_content(str(test_file), "^Test$")
-    assert "Test" in result
-
-    # Test non-existent pattern
-    result = terminal_toolkit.file_find_in_content(str(test_file), "NotFound")
-    assert result == ""
-
-    # Test with directory instead of file
-    result = terminal_toolkit.file_find_in_content(
-        str(test_file.parent), "pattern"
-    )
-    assert "not a file" in result.lower()
-
-
-def test_file_find_by_name(terminal_toolkit, temp_dir):
-    # Create test files
-    (temp_dir / "test1.txt").touch()
-    (temp_dir / "test2.txt").touch()
-    (temp_dir / "other.log").touch()
-    os.makedirs(temp_dir / "subdir")
-    (temp_dir / "subdir" / "test3.txt").touch()
-
-    # Test basic glob pattern
-    result = terminal_toolkit.file_find_by_name(str(temp_dir), "*.txt")
-    assert "test1.txt" in result
-    assert "test2.txt" in result
-    assert "test3.txt" in result
-    assert "other.log" not in result
-
-    # Test specific filename
-    result = terminal_toolkit.file_find_by_name(str(temp_dir), "other.log")
-    assert "other.log" in result
-
-    # Test non-existent pattern
-    result = terminal_toolkit.file_find_by_name(str(temp_dir), "nonexistent*")
-    assert result == ""
-
-    # Test with file instead of directory
-    test_file = temp_dir / "test1.txt"
-    result = terminal_toolkit.file_find_by_name(str(test_file), "*.txt")
-    assert "not a directory" in result.lower()
-
-
 def test_shell_exec(terminal_toolkit, temp_dir):
     # Test basic command execution
     result = terminal_toolkit.shell_exec(
         "test_session",
-        str(temp_dir),
         "echo 'Hello World'",
     )
     assert "Hello World" in result
@@ -108,22 +57,13 @@ def test_shell_exec(terminal_toolkit, temp_dir):
     # Test command with error
     result = terminal_toolkit.shell_exec(
         "test_session",
-        str(temp_dir),
         "nonexistent_command",
     )
     assert "not found" in result.lower()
 
-    # Test with relative path
-    result = terminal_toolkit.shell_exec(
-        "test_session",
-        "relative/path",
-        "echo 'test'",
-    )
-    assert "must be an absolute path" in result.lower()
-
     # Test session persistence
     session_id = "persistent_session"
-    terminal_toolkit.shell_exec(session_id, str(temp_dir), "echo 'test1'")
+    terminal_toolkit.shell_exec(session_id, "echo 'test1'")
     assert session_id in terminal_toolkit.shell_sessions
     assert terminal_toolkit.shell_sessions[session_id]["output"] != ""
 
@@ -135,12 +75,10 @@ def test_shell_exec_multiple_sessions(terminal_toolkit, temp_dir):
 
     result1 = terminal_toolkit.shell_exec(
         session1,
-        str(temp_dir),
         "echo 'Session 1'",
     )
     result2 = terminal_toolkit.shell_exec(
         session2,
-        str(temp_dir),
         "echo 'Session 2'",
     )
 

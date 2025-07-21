@@ -12,8 +12,11 @@
 # limitations under the License.
 # ========= Copyright 2023-2024 @ CAMEL-AI.org. All Rights Reserved. =========
 
+# Enables postponed evaluation of annotations (for string-based type hints)
+from __future__ import annotations
+
+import time
 from dataclasses import asdict
-from datetime import datetime, timezone
 from typing import Any, ClassVar, Dict
 from uuid import UUID, uuid4
 
@@ -39,6 +42,8 @@ class MemoryRecord(BaseModel):
             key-value pairs that provide more information. If not given, it
             will be an empty `Dict`.
         timestamp (float, optional): The timestamp when the record was created.
+        agent_id (str): The identifier of the agent associated with this
+            memory.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -48,8 +53,10 @@ class MemoryRecord(BaseModel):
     uuid: UUID = Field(default_factory=uuid4)
     extra_info: Dict[str, str] = Field(default_factory=dict)
     timestamp: float = Field(
-        default_factory=lambda: datetime.now(timezone.utc).timestamp()
+        default_factory=lambda: time.time_ns()
+        / 1_000_000_000  # Nanosecond precision
     )
+    agent_id: str = Field(default="")
 
     _MESSAGE_TYPES: ClassVar[dict] = {
         "BaseMessage": BaseMessage,
@@ -73,6 +80,7 @@ class MemoryRecord(BaseModel):
             role_at_backend=record_dict["role_at_backend"],
             extra_info=record_dict["extra_info"],
             timestamp=record_dict["timestamp"],
+            agent_id=record_dict["agent_id"],
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -88,6 +96,7 @@ class MemoryRecord(BaseModel):
             "role_at_backend": self.role_at_backend,
             "extra_info": self.extra_info,
             "timestamp": self.timestamp,
+            "agent_id": self.agent_id,
         }
 
     def to_openai_message(self) -> OpenAIMessage:
@@ -101,5 +110,6 @@ class ContextRecord(BaseModel):
     memory_record: MemoryRecord
     score: float
     timestamp: float = Field(
-        default_factory=lambda: datetime.now(timezone.utc).timestamp()
+        default_factory=lambda: time.time_ns()
+        / 1_000_000_000  # Nanosecond precision
     )

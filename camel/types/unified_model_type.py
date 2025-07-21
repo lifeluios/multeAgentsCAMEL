@@ -12,6 +12,7 @@
 # limitations under the License.
 # ========= Copyright 2023-2024 @ CAMEL-AI.org. All Rights Reserved. =========
 import logging
+from enum import Enum
 from threading import Lock
 from typing import TYPE_CHECKING, ClassVar, Dict, Union, cast
 
@@ -32,16 +33,27 @@ class UnifiedModelType(str):
     _lock: ClassVar[Lock] = Lock()
 
     def __new__(cls, value: Union["ModelType", str]) -> "UnifiedModelType":
+        if isinstance(value, Enum):
+            str_value = value.value
+        else:
+            str_value = str(value)
+
         with cls._lock:
-            if value not in cls._cache:
-                instance = super().__new__(cls, value)
-                cls._cache[value] = cast(UnifiedModelType, instance)
+            if str_value not in cls._cache:
+                instance = super().__new__(cls, str_value)
+                cls._cache[str_value] = cast(UnifiedModelType, instance)
             else:
-                instance = cls._cache[value]
+                instance = cls._cache[str_value]
         return instance
 
     def __init__(self, value: Union["ModelType", str]) -> None:
         pass
+
+    def __repr__(self) -> str:
+        return super().__str__()
+
+    def __str__(self) -> str:
+        return super().__str__()
 
     @property
     def value_for_tiktoken(self) -> str:
@@ -64,6 +76,11 @@ class UnifiedModelType(str):
         return True
 
     @property
+    def is_aws_bedrock(self) -> bool:
+        r"""Returns whether the model is an AWS Bedrock model."""
+        return True
+
+    @property
     def is_anthropic(self) -> bool:
         r"""Returns whether the model is an Anthropic model."""
         return True
@@ -79,6 +96,21 @@ class UnifiedModelType(str):
         return True
 
     @property
+    def is_openrouter(self) -> bool:
+        r"""Returns whether the model is a OpenRouter served model."""
+        return True
+
+    @property
+    def is_lmstudio(self) -> bool:
+        r"""Returns whether the model is a LMStudio served model."""
+        return True
+
+    @property
+    def is_ppio(self) -> bool:
+        r"""Returns whether the model is a PPIO served model."""
+        return True
+
+    @property
     def is_zhipuai(self) -> bool:
         r"""Returns whether the model is a Zhipuai model."""
         return True
@@ -91,6 +123,11 @@ class UnifiedModelType(str):
     @property
     def is_mistral(self) -> bool:
         r"""Returns whether the model is a Mistral model."""
+        return True
+
+    @property
+    def is_netmind(self) -> bool:
+        r"""Returns whether the model is a Netmind model."""
         return True
 
     @property
@@ -119,8 +156,33 @@ class UnifiedModelType(str):
         return True
 
     @property
+    def is_modelscope(self) -> bool:
+        r"""Returns whether the model is a ModelScope serverd model."""
+        return True
+
+    @property
     def is_moonshot(self) -> bool:
         r"""Returns whether this platform is Moonshot model."""
+        return True
+
+    @property
+    def is_novita(self) -> bool:
+        r"""Returns whether the model is a Novita served model."""
+        return True
+
+    @property
+    def is_watsonx(self) -> bool:
+        r"""Returns whether the model is a WatsonX served model."""
+        return True
+
+    @property
+    def is_qianfan(self) -> bool:
+        r"""Returns whether the model is a Qianfan served model."""
+        return True
+
+    @property
+    def is_crynux(self) -> bool:
+        r"""Returns whether the model is a Crynux served model."""
         return True
 
     @property

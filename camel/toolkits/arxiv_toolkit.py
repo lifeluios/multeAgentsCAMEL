@@ -17,11 +17,12 @@ from typing import Dict, Generator, List, Optional
 from camel.logger import get_logger
 from camel.toolkits.base import BaseToolkit
 from camel.toolkits.function_tool import FunctionTool
-from camel.utils import dependencies_required
+from camel.utils import MCPServer, dependencies_required
 
 logger = get_logger(__name__)
 
 
+@MCPServer()
 class ArxivToolkit(BaseToolkit):
     r"""A toolkit for interacting with the arXiv API to search and download
     academic papers.
@@ -48,9 +49,9 @@ class ArxivToolkit(BaseToolkit):
             query (str): The search query string used to search for papers on
                 arXiv.
             paper_ids (List[str], optional): A list of specific arXiv paper
-                IDs to search for. (default: :obj: `None`)
+                IDs to search for. (default: :obj:`None`)
             max_results (int, optional): The maximum number of search results
-                to retrieve. (default: :obj: `5`)
+                to retrieve. (default: :obj:`5`)
 
         Returns:
             Generator: A generator that yields results from the arXiv search
@@ -79,9 +80,9 @@ class ArxivToolkit(BaseToolkit):
         Args:
             query (str): The search query string.
             paper_ids (List[str], optional): A list of specific arXiv paper
-                IDs to search for. (default: :obj: `None`)
+                IDs to search for. (default: :obj:`None`)
             max_results (int, optional): The maximum number of search results
-                to return. (default: :obj: `5`)
+                to return. (default: :obj:`5`)
 
         Returns:
             List[Dict[str, str]]: A list of dictionaries, each containing
@@ -137,9 +138,9 @@ class ArxivToolkit(BaseToolkit):
         Args:
             query (str): The search query string.
             paper_ids (List[str], optional): A list of specific arXiv paper
-                IDs to download. (default: :obj: `None`)
+                IDs to download. (default: :obj:`None`)
             max_results (int, optional): The maximum number of search results
-                to download. (default: :obj: `5`)
+                to download. (default: :obj:`5`)
             output_dir (str, optional): The directory to save the downloaded
                 PDFs. Defaults to the current directory.
 

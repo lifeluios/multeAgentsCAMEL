@@ -12,6 +12,7 @@
 # limitations under the License.
 # ========= Copyright 2023-2024 @ CAMEL-AI.org. All Rights Reserved. =========
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -28,7 +29,21 @@ from camel.types import (
     ChatCompletionChunk,
     ModelType,
 )
-from camel.utils import BaseTokenCounter, OpenAITokenCounter
+from camel.utils import (
+    BaseTokenCounter,
+    OpenAITokenCounter,
+    get_current_agent_session_id,
+    update_current_observation,
+    update_langfuse_trace,
+)
+
+if os.environ.get("LANGFUSE_ENABLED", "False").lower() == "true":
+    try:
+        from langfuse.decorators import observe
+    except ImportError:
+        from camel.utils import observe
+else:
+    from camel.utils import observe
 
 
 class SGLangModel(BaseModelBackend):
@@ -51,8 +66,17 @@ class SGLangModel(BaseModelBackend):
             use for the model. If not provided, :obj:`OpenAITokenCounter(
             ModelType.GPT_4O_MINI)` will be used.
             (default: :obj:`None`)
+        timeout (Optional[float], optional): The timeout value in seconds for
+            API calls. If not provided, will fall back to the MODEL_TIMEOUT
+            environment variable or default to 180 seconds.
+            (default: :obj:`None`)
+        max_retries (int, optional): Maximum number of retries for API calls.
+            (default: :obj:`3`)
+        **kwargs (Any): Additional arguments to pass to the client
+            initialization.
 
-    Reference: https://sgl-project.github.io/backend/openai_api_completions.html
+    Reference: https://sgl-project.github.io/backend/openai_api_completions.
+    html
     """
 
     def __init__(
@@ -62,6 +86,9 @@ class SGLangModel(BaseModelBackend):
         api_key: Optional[str] = None,
         url: Optional[str] = None,
         token_counter: Optional[BaseTokenCounter] = None,
+        timeout: Optional[float] = None,
+        max_retries: int = 3,
+        **kwargs: Any,
     ) -> None:
         if model_config_dict is None:
             model_config_dict = SGLangConfig().as_dict()
@@ -73,8 +100,15 @@ class SGLangModel(BaseModelBackend):
         self._lock = threading.Lock()
         self._inactivity_thread: Optional[threading.Thread] = None
 
+        timeout = timeout or float(os.environ.get("MODEL_TIMEOUT", 180))
         super().__init__(
-            model_type, model_config_dict, api_key, url, token_counter
+            model_type,
+            model_config_dict,
+            api_key,
+            url,
+            token_counter,
+            timeout,
+            max_retries,
         )
 
         self._client = None
@@ -82,16 +116,18 @@ class SGLangModel(BaseModelBackend):
         if self._url:
             # Initialize the client if an existing URL is provided
             self._client = OpenAI(
-                timeout=180,
-                max_retries=3,
+                timeout=self._timeout,
+                max_retries=self._max_retries,
                 api_key="Set-but-ignored",  # required but ignored
                 base_url=self._url,
+                **kwargs,
             )
             self._async_client = AsyncOpenAI(
-                timeout=180,
-                max_retries=3,
+                timeout=self._timeout,
+                max_retries=self._max_retries,
                 api_key="Set-but-ignored",  # required but ignored
                 base_url=self._url,
+                **kwargs,
             )
 
     def _start_server(self) -> None:
@@ -112,7 +148,9 @@ class SGLangModel(BaseModelBackend):
                 )
 
                 server_process = _execute_shell_command(cmd)
-                _wait_for_server("http://localhost:30000")
+                _wait_for_server(
+                    base_url="http://localhost:30000", timeout=self._timeout
+                )
                 self._url = "http://127.0.0.1:30000/v1"
                 self.server_process = server_process  # type: ignore[assignment]
                 # Start the inactivity monitor in a background thread
@@ -123,8 +161,8 @@ class SGLangModel(BaseModelBackend):
             self.last_run_time = time.time()
             # Initialize the client after the server starts
             self._client = OpenAI(
-                timeout=180,
-                max_retries=3,
+                timeout=self._timeout,
+                max_retries=self._max_retries,
                 api_key="Set-but-ignored",  # required but ignored
                 base_url=self._url,
             )
@@ -186,6 +224,7 @@ class SGLangModel(BaseModelBackend):
                     "input into SGLang model backend."
                 )
 
+    @observe(as_type='generation')
     async def _arun(
         self,
         messages: List[OpenAIMessage],
@@ -204,6 +243,28 @@ class SGLangModel(BaseModelBackend):
                 `AsyncStream[ChatCompletionChunk]` in the stream mode.
         """
 
+        update_current_observation(
+            input={
+                "messages": messages,
+                "tools": tools,
+            },
+            model=str(self.model_type),
+            model_parameters=self.model_config_dict,
+        )
+        # Update Langfuse trace with current agent session and metadata
+        agent_session_id = get_current_agent_session_id()
+        if agent_session_id:
+            update_langfuse_trace(
+                session_id=agent_session_id,
+                metadata={
+                    "source": "camel",
+                    "agent_id": agent_session_id,
+                    "agent_type": "camel_chat_agent",
+                    "model_type": str(self.model_type),
+                },
+                tags=["CAMEL-AI", str(self.model_type)],
+            )
+
         # Ensure server is running
         self._ensure_server_running()
 
@@ -221,9 +282,16 @@ class SGLangModel(BaseModelBackend):
             model=self.model_type,
             **self.model_config_dict,
         )
-
+        update_current_observation(
+            usage_details={
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            },
+        )
         return response
 
+    @observe(as_type='generation')
     def _run(
         self,
         messages: List[OpenAIMessage],
@@ -241,6 +309,27 @@ class SGLangModel(BaseModelBackend):
                 `ChatCompletion` in the non-stream mode, or
                 `Stream[ChatCompletionChunk]` in the stream mode.
         """
+        update_current_observation(
+            input={
+                "messages": messages,
+                "tools": tools,
+            },
+            model=str(self.model_type),
+            model_parameters=self.model_config_dict,
+        )
+        # Update Langfuse trace with current agent session and metadata
+        agent_session_id = get_current_agent_session_id()
+        if agent_session_id:
+            update_langfuse_trace(
+                session_id=agent_session_id,
+                metadata={
+                    "source": "camel",
+                    "agent_id": agent_session_id,
+                    "agent_type": "camel_chat_agent",
+                    "model_type": str(self.model_type),
+                },
+                tags=["CAMEL-AI", str(self.model_type)],
+            )
 
         # Ensure server is running
         self._ensure_server_running()
@@ -258,6 +347,13 @@ class SGLangModel(BaseModelBackend):
             messages=messages,
             model=self.model_type,
             **self.model_config_dict,
+        )
+        update_current_observation(
+            usage_details={
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            },
         )
 
         return response
@@ -324,7 +420,10 @@ def _kill_process_tree(
 
             # Sometime processes cannot be killed with SIGKILL
             # so we send an additional signal to kill them.
-            itself.send_signal(signal.SIGQUIT)
+            if hasattr(signal, "SIGQUIT"):
+                itself.send_signal(signal.SIGQUIT)
+            else:
+                itself.send_signal(signal.SIGTERM)
         except psutil.NoSuchProcess:
             pass
 
@@ -346,12 +445,12 @@ def _execute_shell_command(command: str) -> subprocess.Popen:
     return subprocess.Popen(parts, text=True, stderr=subprocess.STDOUT)
 
 
-def _wait_for_server(base_url: str, timeout: Optional[int] = 30) -> None:
+def _wait_for_server(base_url: str, timeout: Optional[float] = 30) -> None:
     r"""Wait for the server to be ready by polling the /v1/models endpoint.
 
     Args:
         base_url (str): The base URL of the server
-        timeout (Optional[int]): Maximum time to wait in seconds.
+        timeout (Optional[float]): Maximum time to wait in seconds.
             (default: :obj:`30`)
     """
     import requests

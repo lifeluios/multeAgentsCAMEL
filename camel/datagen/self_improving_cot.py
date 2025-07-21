@@ -116,7 +116,7 @@ class SelfImprovingCoTPipeline:
                 samples to be drawn using the rejection sampling
                 method, where samples are accepted or rejected based on
                 a predefined condition to achieve a desired distribution.
-                (default: :obj: `None`)
+                (default: :obj:`None`)
             evaluate_agent (Optional[ChatAgent]): The chat agent used for
                 evaluating reasoning traces. (default: :obj:`None`)
             reward_model (BaseRewardModel, optional): Model used to evaluate
@@ -518,7 +518,7 @@ class SelfImprovingCoTPipeline:
             self.reason_agent.model_backend.model_config_dict['n'] = (
                 self.rejection_sampling_n
             )
-            # Generate multiple condidate traces in one call using parameter n
+            # Generate multiple candidate traces in one call using parameter n
             responses = self.reason_agent.step(prompt)
             # Extract cancidate traces
             candidate_traces = [choice.content for choice in responses.msgs]
